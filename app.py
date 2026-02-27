@@ -1,4 +1,5 @@
 import os
+import json
 import streamlit as st
 import pandas as pd
 import requests
@@ -28,6 +29,7 @@ MANUAL_COLUMNS = [
     "date", "nicotine_pouches", "vape_puffs", "caffeine_mg",
     "cpap_ahi", "cpap_hours", "cpap_leak_95", "notes",
 ]
+STREAKS_FILE = DATA_DIR / "streaks.json"
 
 # ── Styles ────────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -194,6 +196,39 @@ def latest_val(df, col):
     return s.iloc[-1] if len(s) else None
 
 
+# ── Streak helpers ────────────────────────────────────────────────────────────
+def load_streaks() -> list[dict]:
+    if STREAKS_FILE.exists():
+        return json.loads(STREAKS_FILE.read_text())
+    return []
+
+
+def save_streaks(streaks: list[dict]):
+    STREAKS_FILE.write_text(json.dumps(streaks, indent=2))
+
+
+def streak_duration(start_date: date, as_of: date | None = None):
+    """Return a human-readable duration string and total days."""
+    today = as_of or date.today()
+    delta = today - start_date
+    total_days = delta.days
+    if total_days < 0:
+        return "starts in the future", 0
+
+    years = total_days // 365
+    remaining = total_days % 365
+    months = remaining // 30
+    days = remaining % 30
+
+    parts = []
+    if years:
+        parts.append(f"{years}y")
+    if months:
+        parts.append(f"{months}m")
+    parts.append(f"{days}d")
+    return " ".join(parts), total_days
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## ⚙️ Settings")
@@ -301,6 +336,32 @@ for col in ["nicotine_pouches", "vape_puffs", "caffeine_mg", "cpap_ahi", "cpap_h
 # OVERVIEW
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_overview:
+    # ── Streaks ───────────────────────────────────────────────────────────────
+    streaks = load_streaks()
+    if streaks:
+        streak_cols = st.columns(len(streaks))
+        for col, s in zip(streak_cols, streaks):
+            start = date.fromisoformat(s["start_date"])
+            label, total_days = streak_duration(start)
+            emoji = s.get("emoji", "🔥")
+            with col:
+                st.markdown(
+                    f"""<div style="background:linear-gradient(135deg,#1e1e2e,#2a2a3e);
+                    border-radius:14px;padding:18px 20px;border:1px solid #3a3a5e;
+                    text-align:center;margin-bottom:12px;">
+                    <div style="font-size:1.6em;">{emoji}</div>
+                    <div style="font-size:1.8em;font-weight:800;margin:4px 0;
+                    background:linear-gradient(90deg,#4ade80,#60a5fa);
+                    -webkit-background-clip:text;-webkit-text-fill-color:transparent;">
+                    {total_days:,} days</div>
+                    <div style="font-size:0.95em;color:#ccc;font-weight:600;">
+                    {s['name']}</div>
+                    <div style="font-size:0.8em;color:#888;margin-top:2px;">
+                    {label} · since {start.strftime('%b %-d, %Y')}</div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+
     st.subheader("Most Recent Values")
 
     last_manual = df_manual.dropna(subset=["date"]).iloc[-1] if not df_manual.empty else None
@@ -764,3 +825,45 @@ with tab_data:
         file_name=f"health_log_{date.today()}.csv",
         mime="text/csv",
     )
+
+    # ── Streak management ─────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("🔥 Streaks")
+    st.caption("Track milestones — sobriety, habits, personal goals, etc.")
+
+    current_streaks = load_streaks()
+
+    # Show existing streaks with delete buttons
+    if current_streaks:
+        for i, s in enumerate(current_streaks):
+            sc1, sc2, sc3, sc4 = st.columns([1, 3, 3, 1])
+            sc1.write(s.get("emoji", "🔥"))
+            sc2.write(f"**{s['name']}**")
+            sc3.write(f"Since {s['start_date']}")
+            if sc4.button("🗑️", key=f"del_streak_{i}"):
+                current_streaks.pop(i)
+                save_streaks(current_streaks)
+                st.rerun()
+    else:
+        st.caption("No streaks yet — add one below.")
+
+    # Add new streak
+    with st.form("add_streak", clear_on_submit=True):
+        st.markdown("**Add a streak**")
+        asc1, asc2, asc3 = st.columns([3, 3, 1])
+        with asc1:
+            streak_name = st.text_input("Name", placeholder="e.g. Sobriety")
+        with asc2:
+            streak_start = st.date_input("Start date", value=date.today())
+        with asc3:
+            streak_emoji = st.text_input("Emoji", value="🔥", max_chars=2)
+        if st.form_submit_button("➕ Add Streak"):
+            if streak_name:
+                current_streaks.append({
+                    "name": streak_name,
+                    "start_date": streak_start.isoformat(),
+                    "emoji": streak_emoji or "🔥",
+                })
+                save_streaks(current_streaks)
+                st.success(f"Added streak: {streak_name}")
+                st.rerun()
