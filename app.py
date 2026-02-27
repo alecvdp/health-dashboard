@@ -27,7 +27,7 @@ OURA_BASE = "https://api.ouraring.com/v2/usercollection"
 
 MANUAL_COLUMNS = [
     "date", "nicotine_pouches", "vape_puffs", "caffeine_mg",
-    "cpap_ahi", "cpap_hours", "cpap_leak_95", "notes",
+    "weight_lbs", "cpap_ahi", "cpap_hours", "cpap_leak_95", "notes",
 ]
 STREAKS_FILE = DATA_DIR / "streaks.json"
 
@@ -265,6 +265,8 @@ with st.sidebar:
         nicotine = st.number_input("Nicotine pouches", min_value=0, max_value=99, step=1, value=0)
         vape_puffs = st.number_input("Vape puffs", min_value=0, max_value=9999, step=1, value=0)
         caffeine = st.number_input("Caffeine (mg)", min_value=0, max_value=3000, step=25, value=0)
+        weight = st.number_input("Weight (lbs)", min_value=0.0, max_value=999.0, step=0.1,
+                                  format="%.1f", value=0.0)
         cpap_ahi = st.number_input("CPAP AHI", min_value=0.0, max_value=999.0, step=0.1,
                                     format="%.1f", value=0.0)
         cpap_hours = st.number_input("CPAP hours used", min_value=0.0, max_value=24.0, step=0.25,
@@ -281,6 +283,7 @@ with st.sidebar:
             "nicotine_pouches": nicotine if nicotine > 0 else None,
             "vape_puffs": vape_puffs if vape_puffs > 0 else None,
             "caffeine_mg": caffeine if caffeine > 0 else None,
+            "weight_lbs": weight if weight > 0 else None,
             "cpap_ahi": cpap_ahi if cpap_ahi > 0 else None,
             "cpap_hours": cpap_hours if cpap_hours > 0 else None,
             "cpap_leak_95": cpap_leak if cpap_leak > 0 else None,
@@ -322,8 +325,11 @@ df_manual = df_all_manual[
     (df_all_manual["date"] <= pd.Timestamp(end_date))
 ].copy().sort_values("date").reset_index(drop=True)
 
-for col in ["nicotine_pouches", "vape_puffs", "caffeine_mg", "cpap_ahi", "cpap_hours", "cpap_leak_95"]:
+for col in ["nicotine_pouches", "vape_puffs", "caffeine_mg", "weight_lbs", "cpap_ahi", "cpap_hours", "cpap_leak_95"]:
     df_manual[col] = pd.to_numeric(df_manual[col], errors="coerce")
+
+# Forward-fill weight so gaps carry the last known value for charts
+df_manual["weight_lbs"] = df_manual["weight_lbs"].ffill()
 
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -387,21 +393,24 @@ with tab_overview:
     vape_latest = safe_int(last_manual["vape_puffs"]) if last_manual is not None else None
     caffeine_latest = safe_int(last_manual["caffeine_mg"]) if last_manual is not None else None
     ahi_latest = safe_float(last_manual["cpap_ahi"]) if last_manual is not None else None
+    weight_latest = safe_float(last_manual["weight_lbs"]) if last_manual is not None else None
 
-    m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
+    m1, m2, m3, m4 = st.columns(4)
+    m5, m6, m7, m8 = st.columns(4)
     m1.metric("😴 Sleep Score", sleep_score if sleep_score is not None else "—")
     m2.metric("⚡ Readiness", readiness_score if readiness_score is not None else "—")
     m3.metric("👟 Steps", f"{steps:,}" if steps is not None else "—")
-    m4.metric("🫧 Pouches", f"{nicotine_latest}" if nicotine_latest is not None else "—")
-    m5.metric("💨 Vape puffs", f"{vape_latest}" if vape_latest is not None else "—")
-    m6.metric("☕ Caffeine", f"{caffeine_latest} mg" if caffeine_latest is not None else "—")
-    m7.metric("😮‍💨 CPAP AHI", f"{ahi_latest}" if ahi_latest is not None else "—")
+    m4.metric("⚖️ Weight", f"{weight_latest} lbs" if weight_latest is not None else "—")
+    m5.metric("🫧 Pouches", f"{nicotine_latest}" if nicotine_latest is not None else "—")
+    m6.metric("💨 Vape puffs", f"{vape_latest}" if vape_latest is not None else "—")
+    m7.metric("☕ Caffeine", f"{caffeine_latest} mg" if caffeine_latest is not None else "—")
+    m8.metric("😮‍💨 CPAP AHI", f"{ahi_latest}" if ahi_latest is not None else "—")
 
     st.divider()
     st.subheader(f"Trends — {start_date.strftime('%b %-d')} → {end_date.strftime('%b %-d, %Y')}")
 
     r1c1, r1c2, r1c3 = st.columns(3)
-    r2c1, r2c2, r2c3, r2c4 = st.columns(4)
+    r2c1, r2c2, r2c3, r2c4, r2c5 = st.columns(5)
 
     with r1c1:
         if not df_sleep.empty and "score" in df_sleep:
@@ -446,6 +455,13 @@ with tab_overview:
             st.caption("Caffeine — no data logged")
 
     with r2c4:
+        if not df_manual.empty and df_manual["weight_lbs"].notna().any():
+            st.plotly_chart(line_chart(df_manual, "date", "weight_lbs", "Weight",
+                                       "#a78bfa", "lbs"), use_container_width=True)
+        else:
+            st.caption("Weight — no data logged")
+
+    with r2c5:
         if not df_manual.empty and df_manual["cpap_ahi"].notna().any():
             st.plotly_chart(line_chart(df_manual, "date", "cpap_ahi", "CPAP AHI",
                                        "#60a5fa", "events/hr"), use_container_width=True)
@@ -618,54 +634,86 @@ with tab_activity:
 # LIFESTYLE (Nicotine + Caffeine)
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_lifestyle:
-    has_nic = not df_manual.empty and df_manual["nicotine_pouches"].notna().any()
-    has_vape = not df_manual.empty and df_manual["vape_puffs"].notna().any()
-    has_caf = not df_manual.empty and df_manual["caffeine_mg"].notna().any()
+    @st.fragment
+    def lifestyle_fragment():
+        # Local date range for Lifestyle tab
+        range_options = {"30 days": 30, "90 days": 90, "6 months": 180, "1 year": 365, "All time": None}
+        sel = st.radio("Date range", list(range_options.keys()), horizontal=True, index=0, key="lifestyle_range")
+        days_back = range_options[sel]
+        if days_back is not None:
+            ls_start = pd.Timestamp(date.today() - timedelta(days=days_back))
+            df_ls = df_all_manual[df_all_manual["date"] >= ls_start].copy()
+        else:
+            df_ls = df_all_manual.copy()
+        df_ls = df_ls.sort_values("date").reset_index(drop=True)
+        for col in ["nicotine_pouches", "vape_puffs", "caffeine_mg", "weight_lbs", "cpap_ahi", "cpap_hours", "cpap_leak_95"]:
+            df_ls[col] = pd.to_numeric(df_ls[col], errors="coerce")
+        df_ls["weight_lbs"] = df_ls["weight_lbs"].ffill()
 
-    if not has_nic and not has_vape and not has_caf:
-        st.info("No lifestyle data yet — use the sidebar form to log nicotine and caffeine.")
-    else:
-        c1, c2, c3 = st.columns(3)
+        has_nic = not df_ls.empty and df_ls["nicotine_pouches"].notna().any()
+        has_vape = not df_ls.empty and df_ls["vape_puffs"].notna().any()
+        has_caf = not df_ls.empty and df_ls["caffeine_mg"].notna().any()
+        has_weight = not df_ls.empty and df_ls["weight_lbs"].notna().any()
 
-        with c1:
-            st.subheader("🫧 Pouches")
-            if has_nic:
-                df_nic = df_manual[df_manual["nicotine_pouches"].notna()]
-                st.plotly_chart(bar_chart(df_nic, "date", "nicotine_pouches",
-                                          "Pouches per Day", "#f87171", "pouches"),
-                                use_container_width=True)
-                ma, mb = st.columns(2)
-                ma.metric("Avg / day", f"{df_nic['nicotine_pouches'].mean():.1f}")
-                mb.metric("Total", f"{int(df_nic['nicotine_pouches'].sum())}")
+        if not has_nic and not has_vape and not has_caf and not has_weight:
+            st.info("No lifestyle data yet — use the sidebar form to log nicotine, caffeine, and weight.")
+        else:
+            c1, c2, c3 = st.columns(3)
+
+            with c1:
+                st.subheader("🫧 Pouches")
+                if has_nic:
+                    df_nic = df_ls[df_ls["nicotine_pouches"].notna()]
+                    st.plotly_chart(bar_chart(df_nic, "date", "nicotine_pouches",
+                                              "Pouches per Day", "#f87171", "pouches"),
+                                    use_container_width=True)
+                    ma, mb = st.columns(2)
+                    ma.metric("Avg / day", f"{df_nic['nicotine_pouches'].mean():.1f}")
+                    mb.metric("Total", f"{int(df_nic['nicotine_pouches'].sum())}")
+                else:
+                    st.caption("No data in this date range.")
+
+            with c2:
+                st.subheader("💨 Vape Puffs")
+                if has_vape:
+                    df_vape = df_ls[df_ls["vape_puffs"].notna()]
+                    st.plotly_chart(bar_chart(df_vape, "date", "vape_puffs",
+                                              "Puffs per Day", "#fb923c", "puffs"),
+                                    use_container_width=True)
+                    ma, mb = st.columns(2)
+                    ma.metric("Avg / day", f"{df_vape['vape_puffs'].mean():.0f}")
+                    mb.metric("Total", f"{int(df_vape['vape_puffs'].sum())}")
+                else:
+                    st.caption("No data in this date range.")
+
+            with c3:
+                st.subheader("☕ Caffeine")
+                if has_caf:
+                    df_caf = df_ls[df_ls["caffeine_mg"].notna()]
+                    st.plotly_chart(bar_chart(df_caf, "date", "caffeine_mg",
+                                              "Caffeine per Day", "#fbbf24", "mg",
+                                              hline=400, hline_label="400mg daily max"),
+                                    use_container_width=True)
+                    ma, mb = st.columns(2)
+                    ma.metric("Avg / day", f"{df_caf['caffeine_mg'].mean():.0f} mg")
+                    mb.metric("Peak day", f"{df_caf['caffeine_mg'].max():.0f} mg")
+                else:
+                    st.caption("No data in this date range.")
+
+            st.divider()
+            st.subheader("⚖️ Weight")
+            if has_weight:
+                df_wt = df_ls[df_ls["weight_lbs"].notna()]
+                st.plotly_chart(line_chart(df_wt, "date", "weight_lbs", "Weight Over Time",
+                                           "#a78bfa", "lbs"), use_container_width=True)
+                ma, mb, mc = st.columns(3)
+                ma.metric("Current", f"{df_wt['weight_lbs'].iloc[-1]:.1f} lbs")
+                mb.metric("Avg", f"{df_wt['weight_lbs'].mean():.1f} lbs")
+                mc.metric("Range", f"{df_wt['weight_lbs'].min():.1f} – {df_wt['weight_lbs'].max():.1f} lbs")
             else:
-                st.caption("No data in this date range.")
+                st.caption("No weight data in this date range.")
 
-        with c2:
-            st.subheader("💨 Vape Puffs")
-            if has_vape:
-                df_vape = df_manual[df_manual["vape_puffs"].notna()]
-                st.plotly_chart(bar_chart(df_vape, "date", "vape_puffs",
-                                          "Puffs per Day", "#fb923c", "puffs"),
-                                use_container_width=True)
-                ma, mb = st.columns(2)
-                ma.metric("Avg / day", f"{df_vape['vape_puffs'].mean():.0f}")
-                mb.metric("Total", f"{int(df_vape['vape_puffs'].sum())}")
-            else:
-                st.caption("No data in this date range.")
-
-        with c3:
-            st.subheader("☕ Caffeine")
-            if has_caf:
-                df_caf = df_manual[df_manual["caffeine_mg"].notna()]
-                st.plotly_chart(bar_chart(df_caf, "date", "caffeine_mg",
-                                          "Caffeine per Day", "#fbbf24", "mg",
-                                          hline=400, hline_label="400mg daily max"),
-                                use_container_width=True)
-                ma, mb = st.columns(2)
-                ma.metric("Avg / day", f"{df_caf['caffeine_mg'].mean():.0f} mg")
-                mb.metric("Peak day", f"{df_caf['caffeine_mg'].max():.0f} mg")
-            else:
-                st.caption("No data in this date range.")
+    lifestyle_fragment()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -797,7 +845,7 @@ with tab_data:
 
         df_editor_src = init_manual_log().copy()
         df_editor_src["date"] = pd.to_datetime(df_editor_src["date"], errors="coerce").dt.date
-        for col in ["nicotine_pouches", "vape_puffs", "caffeine_mg", "cpap_ahi", "cpap_hours", "cpap_leak_95"]:
+        for col in ["nicotine_pouches", "vape_puffs", "caffeine_mg", "weight_lbs", "cpap_ahi", "cpap_hours", "cpap_leak_95"]:
             df_editor_src[col] = pd.to_numeric(df_editor_src[col], errors="coerce")
 
         edited = st.data_editor(
@@ -809,6 +857,7 @@ with tab_data:
                 "nicotine_pouches": st.column_config.NumberColumn("Pouches", min_value=0, max_value=99, step=1),
                 "vape_puffs": st.column_config.NumberColumn("Vape Puffs", min_value=0, max_value=9999, step=1),
                 "caffeine_mg": st.column_config.NumberColumn("Caffeine (mg)", min_value=0, max_value=3000, step=25),
+                "weight_lbs": st.column_config.NumberColumn("Weight (lbs)", min_value=0.0, max_value=999.0, step=0.1, format="%.1f"),
                 "cpap_ahi": st.column_config.NumberColumn("CPAP AHI", min_value=0.0, format="%.1f"),
                 "cpap_hours": st.column_config.NumberColumn("CPAP Hours", min_value=0.0, max_value=24.0, format="%.2f"),
                 "cpap_leak_95": st.column_config.NumberColumn("Leak 95th %tile", min_value=0.0, format="%.1f"),
