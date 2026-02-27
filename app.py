@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import requests
@@ -5,6 +6,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta, date
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -21,7 +25,7 @@ MANUAL_LOG = DATA_DIR / "manual_log.csv"
 OURA_BASE = "https://api.ouraring.com/v2/usercollection"
 
 MANUAL_COLUMNS = [
-    "date", "nicotine_pouches", "caffeine_mg",
+    "date", "nicotine_pouches", "vape_puffs", "caffeine_mg",
     "cpap_ahi", "cpap_hours", "cpap_leak_95", "notes",
 ]
 
@@ -194,12 +198,16 @@ def latest_val(df, col):
 with st.sidebar:
     st.markdown("## ⚙️ Settings")
 
+    # Seed from .env on first load
+    if "oura_token" not in st.session_state:
+        st.session_state["oura_token"] = os.getenv("OURA_TOKEN", "")
+
     oura_token = st.text_input(
         "Oura API Token",
         type="password",
-        value=st.session_state.get("oura_token", ""),
+        value=st.session_state["oura_token"],
         placeholder="Paste your personal access token",
-        help="Generate one at cloud.ouraring.com/personal-access-tokens",
+        help="Or set OURA_TOKEN in a .env file to load automatically",
     )
     if oura_token:
         st.session_state["oura_token"] = oura_token
@@ -218,6 +226,7 @@ with st.sidebar:
     with st.form("manual_entry", clear_on_submit=True):
         log_date = st.date_input("Date", value=date.today())
         nicotine = st.number_input("Nicotine pouches", min_value=0, max_value=99, step=1, value=0)
+        vape_puffs = st.number_input("Vape puffs", min_value=0, max_value=9999, step=1, value=0)
         caffeine = st.number_input("Caffeine (mg)", min_value=0, max_value=3000, step=25, value=0)
         cpap_ahi = st.number_input("CPAP AHI", min_value=0.0, max_value=999.0, step=0.1,
                                     format="%.1f", value=0.0)
@@ -233,6 +242,7 @@ with st.sidebar:
         new_row = {
             "date": str(log_date),
             "nicotine_pouches": nicotine if nicotine > 0 else None,
+            "vape_puffs": vape_puffs if vape_puffs > 0 else None,
             "caffeine_mg": caffeine if caffeine > 0 else None,
             "cpap_ahi": cpap_ahi if cpap_ahi > 0 else None,
             "cpap_hours": cpap_hours if cpap_hours > 0 else None,
@@ -275,7 +285,7 @@ df_manual = df_all_manual[
     (df_all_manual["date"] <= pd.Timestamp(end_date))
 ].copy().sort_values("date").reset_index(drop=True)
 
-for col in ["nicotine_pouches", "caffeine_mg", "cpap_ahi", "cpap_hours", "cpap_leak_95"]:
+for col in ["nicotine_pouches", "vape_puffs", "caffeine_mg", "cpap_ahi", "cpap_hours", "cpap_leak_95"]:
     df_manual[col] = pd.to_numeric(df_manual[col], errors="coerce")
 
 
@@ -311,22 +321,24 @@ with tab_overview:
     readiness_score = safe_int(latest_val(df_readiness, "score"))
     steps = safe_int(latest_val(df_activity, "steps"))
     nicotine_latest = safe_int(last_manual["nicotine_pouches"]) if last_manual is not None else None
+    vape_latest = safe_int(last_manual["vape_puffs"]) if last_manual is not None else None
     caffeine_latest = safe_int(last_manual["caffeine_mg"]) if last_manual is not None else None
     ahi_latest = safe_float(last_manual["cpap_ahi"]) if last_manual is not None else None
 
-    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
     m1.metric("😴 Sleep Score", sleep_score if sleep_score is not None else "—")
     m2.metric("⚡ Readiness", readiness_score if readiness_score is not None else "—")
     m3.metric("👟 Steps", f"{steps:,}" if steps is not None else "—")
-    m4.metric("🚬 Nicotine", f"{nicotine_latest} pouches" if nicotine_latest is not None else "—")
-    m5.metric("☕ Caffeine", f"{caffeine_latest} mg" if caffeine_latest is not None else "—")
-    m6.metric("😮‍💨 CPAP AHI", f"{ahi_latest}" if ahi_latest is not None else "—")
+    m4.metric("🫧 Pouches", f"{nicotine_latest}" if nicotine_latest is not None else "—")
+    m5.metric("💨 Vape puffs", f"{vape_latest}" if vape_latest is not None else "—")
+    m6.metric("☕ Caffeine", f"{caffeine_latest} mg" if caffeine_latest is not None else "—")
+    m7.metric("😮‍💨 CPAP AHI", f"{ahi_latest}" if ahi_latest is not None else "—")
 
     st.divider()
     st.subheader(f"Trends — {start_date.strftime('%b %-d')} → {end_date.strftime('%b %-d, %Y')}")
 
     r1c1, r1c2, r1c3 = st.columns(3)
-    r2c1, r2c2, r2c3 = st.columns(3)
+    r2c1, r2c2, r2c3, r2c4 = st.columns(4)
 
     with r1c1:
         if not df_sleep.empty and "score" in df_sleep:
@@ -351,19 +363,26 @@ with tab_overview:
 
     with r2c1:
         if not df_manual.empty and df_manual["nicotine_pouches"].notna().any():
-            st.plotly_chart(bar_chart(df_manual, "date", "nicotine_pouches", "Nicotine Pouches",
+            st.plotly_chart(bar_chart(df_manual, "date", "nicotine_pouches", "Pouches",
                                       "#f87171", "pouches/day"), use_container_width=True)
         else:
-            st.caption("Nicotine — no data logged")
+            st.caption("Pouches — no data logged")
 
     with r2c2:
+        if not df_manual.empty and df_manual["vape_puffs"].notna().any():
+            st.plotly_chart(bar_chart(df_manual, "date", "vape_puffs", "Vape Puffs",
+                                      "#fb923c", "puffs/day"), use_container_width=True)
+        else:
+            st.caption("Vape — no data logged")
+
+    with r2c3:
         if not df_manual.empty and df_manual["caffeine_mg"].notna().any():
             st.plotly_chart(bar_chart(df_manual, "date", "caffeine_mg", "Caffeine",
                                       "#fbbf24", "mg/day", hline=400, hline_label="400mg"), use_container_width=True)
         else:
             st.caption("Caffeine — no data logged")
 
-    with r2c3:
+    with r2c4:
         if not df_manual.empty and df_manual["cpap_ahi"].notna().any():
             st.plotly_chart(line_chart(df_manual, "date", "cpap_ahi", "CPAP AHI",
                                        "#60a5fa", "events/hr"), use_container_width=True)
@@ -537,71 +556,53 @@ with tab_activity:
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_lifestyle:
     has_nic = not df_manual.empty and df_manual["nicotine_pouches"].notna().any()
+    has_vape = not df_manual.empty and df_manual["vape_puffs"].notna().any()
     has_caf = not df_manual.empty and df_manual["caffeine_mg"].notna().any()
 
-    if not has_nic and not has_caf:
+    if not has_nic and not has_vape and not has_caf:
         st.info("No lifestyle data yet — use the sidebar form to log nicotine and caffeine.")
     else:
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
 
         with c1:
-            st.subheader("🚬 Nicotine Pouches")
+            st.subheader("🫧 Pouches")
             if has_nic:
                 df_nic = df_manual[df_manual["nicotine_pouches"].notna()]
-                fig_nic = bar_chart(df_nic, "date", "nicotine_pouches",
-                                    "Pouches per Day", "#f87171", "pouches")
-                st.plotly_chart(fig_nic, use_container_width=True)
-
-                avg = df_nic["nicotine_pouches"].mean()
-                total = df_nic["nicotine_pouches"].sum()
+                st.plotly_chart(bar_chart(df_nic, "date", "nicotine_pouches",
+                                          "Pouches per Day", "#f87171", "pouches"),
+                                use_container_width=True)
                 ma, mb = st.columns(2)
-                ma.metric("Avg / day", f"{avg:.1f}")
-                mb.metric("Total", f"{int(total)}")
+                ma.metric("Avg / day", f"{df_nic['nicotine_pouches'].mean():.1f}")
+                mb.metric("Total", f"{int(df_nic['nicotine_pouches'].sum())}")
             else:
-                st.caption("No nicotine data in this date range.")
+                st.caption("No data in this date range.")
 
         with c2:
+            st.subheader("💨 Vape Puffs")
+            if has_vape:
+                df_vape = df_manual[df_manual["vape_puffs"].notna()]
+                st.plotly_chart(bar_chart(df_vape, "date", "vape_puffs",
+                                          "Puffs per Day", "#fb923c", "puffs"),
+                                use_container_width=True)
+                ma, mb = st.columns(2)
+                ma.metric("Avg / day", f"{df_vape['vape_puffs'].mean():.0f}")
+                mb.metric("Total", f"{int(df_vape['vape_puffs'].sum())}")
+            else:
+                st.caption("No data in this date range.")
+
+        with c3:
             st.subheader("☕ Caffeine")
             if has_caf:
                 df_caf = df_manual[df_manual["caffeine_mg"].notna()]
-                fig_caf = bar_chart(df_caf, "date", "caffeine_mg",
-                                    "Caffeine per Day", "#fbbf24", "mg",
-                                    hline=400, hline_label="400mg daily max")
-                st.plotly_chart(fig_caf, use_container_width=True)
-
-                avg_c = df_caf["caffeine_mg"].mean()
-                max_c = df_caf["caffeine_mg"].max()
+                st.plotly_chart(bar_chart(df_caf, "date", "caffeine_mg",
+                                          "Caffeine per Day", "#fbbf24", "mg",
+                                          hline=400, hline_label="400mg daily max"),
+                                use_container_width=True)
                 ma, mb = st.columns(2)
-                ma.metric("Avg / day", f"{avg_c:.0f} mg")
-                mb.metric("Peak day", f"{max_c:.0f} mg")
+                ma.metric("Avg / day", f"{df_caf['caffeine_mg'].mean():.0f} mg")
+                mb.metric("Peak day", f"{df_caf['caffeine_mg'].max():.0f} mg")
             else:
-                st.caption("No caffeine data in this date range.")
-
-        # Combined overlay
-        if has_nic and has_caf:
-            st.subheader("Combined Timeline")
-            df_combo = df_manual[df_manual["nicotine_pouches"].notna() | df_manual["caffeine_mg"].notna()]
-            fig_combo = go.Figure()
-            fig_combo.add_trace(go.Bar(
-                x=df_combo["date"], y=df_combo["nicotine_pouches"],
-                name="Nicotine (pouches)", yaxis="y",
-                marker_color="#f87171", opacity=0.85,
-            ))
-            fig_combo.add_trace(go.Scatter(
-                x=df_combo["date"], y=df_combo["caffeine_mg"],
-                name="Caffeine (mg)", yaxis="y2",
-                mode="lines+markers", line=dict(color="#fbbf24", width=2),
-            ))
-            fig_combo.update_layout(
-                template="plotly_dark",
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                margin=dict(l=0, r=60, t=10, b=0),
-                xaxis_title="",
-                yaxis=dict(title="Pouches", side="left"),
-                yaxis2=dict(title="Caffeine (mg)", side="right", overlaying="y"),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02),
-            )
-            st.plotly_chart(fig_combo, use_container_width=True)
+                st.caption("No data in this date range.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -730,7 +731,7 @@ with tab_data:
 
     df_editor_src = init_manual_log().copy()
     df_editor_src["date"] = pd.to_datetime(df_editor_src["date"], errors="coerce").dt.date
-    for col in ["nicotine_pouches", "caffeine_mg", "cpap_ahi", "cpap_hours", "cpap_leak_95"]:
+    for col in ["nicotine_pouches", "vape_puffs", "caffeine_mg", "cpap_ahi", "cpap_hours", "cpap_leak_95"]:
         df_editor_src[col] = pd.to_numeric(df_editor_src[col], errors="coerce")
 
     edited = st.data_editor(
@@ -739,7 +740,8 @@ with tab_data:
         num_rows="dynamic",
         column_config={
             "date": st.column_config.DateColumn("Date", required=True),
-            "nicotine_pouches": st.column_config.NumberColumn("Nicotine Pouches", min_value=0, max_value=99, step=1),
+            "nicotine_pouches": st.column_config.NumberColumn("Pouches", min_value=0, max_value=99, step=1),
+            "vape_puffs": st.column_config.NumberColumn("Vape Puffs", min_value=0, max_value=9999, step=1),
             "caffeine_mg": st.column_config.NumberColumn("Caffeine (mg)", min_value=0, max_value=3000, step=25),
             "cpap_ahi": st.column_config.NumberColumn("CPAP AHI", min_value=0.0, format="%.1f"),
             "cpap_hours": st.column_config.NumberColumn("CPAP Hours", min_value=0.0, max_value=24.0, format="%.2f"),
