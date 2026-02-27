@@ -36,10 +36,6 @@ No test suite or linter is configured.
 - `data/streaks.json` — Array of `{name, start_date, emoji}` objects.
 - `.env` — Contains `OURA_TOKEN` for API access.
 
-## Helper Scripts
-
-- `scripts/log_nicotine.py` — CLI for logging from macOS/iOS Shortcuts: `python3 scripts/log_nicotine.py <pouches> <vape_puffs>`
-
 ## Key Dependencies
 
 streamlit (>=1.32), pandas, plotly, requests, python-dotenv

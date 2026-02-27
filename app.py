@@ -63,6 +63,8 @@ def init_manual_log() -> pd.DataFrame:
     for col in MANUAL_COLUMNS:
         if col not in df.columns:
             df[col] = None
+    # Deduplicate: if multiple rows for the same date, keep the last one
+    df = df.drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
     return df[MANUAL_COLUMNS]
 
 
