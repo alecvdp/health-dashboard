@@ -790,34 +790,39 @@ with tab_cpap:
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_data:
     st.subheader("Manual Log — All Entries")
-    st.caption("Edit cells directly, then click **Save Changes**.")
 
-    df_editor_src = init_manual_log().copy()
-    df_editor_src["date"] = pd.to_datetime(df_editor_src["date"], errors="coerce").dt.date
-    for col in ["nicotine_pouches", "vape_puffs", "caffeine_mg", "cpap_ahi", "cpap_hours", "cpap_leak_95"]:
-        df_editor_src[col] = pd.to_numeric(df_editor_src[col], errors="coerce")
+    @st.fragment
+    def data_editor_fragment():
+        st.caption("Edit cells directly, then click **Save Changes**.")
 
-    edited = st.data_editor(
-        df_editor_src.sort_values("date", ascending=False).reset_index(drop=True),
-        use_container_width=True,
-        num_rows="dynamic",
-        column_config={
-            "date": st.column_config.DateColumn("Date", required=True),
-            "nicotine_pouches": st.column_config.NumberColumn("Pouches", min_value=0, max_value=99, step=1),
-            "vape_puffs": st.column_config.NumberColumn("Vape Puffs", min_value=0, max_value=9999, step=1),
-            "caffeine_mg": st.column_config.NumberColumn("Caffeine (mg)", min_value=0, max_value=3000, step=25),
-            "cpap_ahi": st.column_config.NumberColumn("CPAP AHI", min_value=0.0, format="%.1f"),
-            "cpap_hours": st.column_config.NumberColumn("CPAP Hours", min_value=0.0, max_value=24.0, format="%.2f"),
-            "cpap_leak_95": st.column_config.NumberColumn("Leak 95th %tile", min_value=0.0, format="%.1f"),
-            "notes": st.column_config.TextColumn("Notes"),
-        },
-    )
+        df_editor_src = init_manual_log().copy()
+        df_editor_src["date"] = pd.to_datetime(df_editor_src["date"], errors="coerce").dt.date
+        for col in ["nicotine_pouches", "vape_puffs", "caffeine_mg", "cpap_ahi", "cpap_hours", "cpap_leak_95"]:
+            df_editor_src[col] = pd.to_numeric(df_editor_src[col], errors="coerce")
 
-    if st.button("💾 Save Changes", type="primary"):
-        edited["date"] = edited["date"].astype(str)
-        save_manual_log(edited)
-        st.success("Saved!")
-        st.rerun()
+        edited = st.data_editor(
+            df_editor_src.sort_values("date", ascending=False).reset_index(drop=True),
+            use_container_width=True,
+            num_rows="dynamic",
+            column_config={
+                "date": st.column_config.DateColumn("Date", required=True),
+                "nicotine_pouches": st.column_config.NumberColumn("Pouches", min_value=0, max_value=99, step=1),
+                "vape_puffs": st.column_config.NumberColumn("Vape Puffs", min_value=0, max_value=9999, step=1),
+                "caffeine_mg": st.column_config.NumberColumn("Caffeine (mg)", min_value=0, max_value=3000, step=25),
+                "cpap_ahi": st.column_config.NumberColumn("CPAP AHI", min_value=0.0, format="%.1f"),
+                "cpap_hours": st.column_config.NumberColumn("CPAP Hours", min_value=0.0, max_value=24.0, format="%.2f"),
+                "cpap_leak_95": st.column_config.NumberColumn("Leak 95th %tile", min_value=0.0, format="%.1f"),
+                "notes": st.column_config.TextColumn("Notes"),
+            },
+        )
+
+        if st.button("💾 Save Changes", type="primary"):
+            edited["date"] = edited["date"].astype(str)
+            save_manual_log(edited)
+            st.success("Saved!")
+            st.rerun()
+
+    data_editor_fragment()
 
     st.divider()
     csv_export = init_manual_log().to_csv(index=False)
