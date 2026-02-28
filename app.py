@@ -16,7 +16,7 @@ st.set_page_config(
     page_title="Health Dashboard",
     page_icon="🩺",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -50,6 +50,47 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] {
         border-radius: 8px 8px 0 0;
         padding: 6px 18px;
+    }
+
+    /* ── Hamburger toggle for collapsed sidebar ─────────────────────────── */
+    [data-testid="collapsedControl"] {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        z-index: 999;
+        background: #1e1e2e;
+        border: 1px solid #2a2a3e;
+        border-radius: 10px;
+        width: 44px;
+        height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.2s ease;
+    }
+    [data-testid="collapsedControl"]:hover {
+        background: #2a2a3e;
+    }
+    [data-testid="collapsedControl"] svg {
+        width: 22px;
+        height: 22px;
+        color: #60a5fa;
+    }
+
+    /* ── Sidebar close button styling ───────────────────────────────────── */
+    [data-testid="stSidebar"] button[kind="header"] {
+        background: #1e1e2e;
+        border: 1px solid #2a2a3e;
+        border-radius: 10px;
+        width: 36px;
+        height: 36px;
+        transition: background 0.2s ease;
+    }
+    [data-testid="stSidebar"] button[kind="header"]:hover {
+        background: #2a2a3e;
+    }
+    [data-testid="stSidebar"] button[kind="header"] svg {
+        color: #60a5fa;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -233,48 +274,44 @@ def streak_duration(start_date: date, as_of: date | None = None):
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## ⚙️ Settings")
+    with st.expander("⚙️ Settings", expanded=True):
+        # Seed from .env on first load
+        if "oura_token" not in st.session_state:
+            st.session_state["oura_token"] = os.getenv("OURA_TOKEN", "")
 
-    # Seed from .env on first load
-    if "oura_token" not in st.session_state:
-        st.session_state["oura_token"] = os.getenv("OURA_TOKEN", "")
+        oura_token = st.text_input(
+            "Oura API Token",
+            type="password",
+            value=st.session_state["oura_token"],
+            placeholder="Paste your personal access token",
+            help="Or set OURA_TOKEN in a .env file to load automatically",
+        )
+        if oura_token:
+            st.session_state["oura_token"] = oura_token
 
-    oura_token = st.text_input(
-        "Oura API Token",
-        type="password",
-        value=st.session_state["oura_token"],
-        placeholder="Paste your personal access token",
-        help="Or set OURA_TOKEN in a .env file to load automatically",
-    )
-    if oura_token:
-        st.session_state["oura_token"] = oura_token
+    with st.expander("📅 Date Range", expanded=True):
+        col_a, col_b = st.columns(2)
+        with col_a:
+            start_date = st.date_input("From", value=date.today() - timedelta(days=30))
+        with col_b:
+            end_date = st.date_input("To", value=date.today())
 
-    st.markdown("---")
-    st.markdown("### 📅 Date Range")
-    col_a, col_b = st.columns(2)
-    with col_a:
-        start_date = st.date_input("From", value=date.today() - timedelta(days=30))
-    with col_b:
-        end_date = st.date_input("To", value=date.today())
-
-    st.markdown("---")
-    st.markdown("### ✏️ Log Entry")
-
-    with st.form("manual_entry", clear_on_submit=True):
-        log_date = st.date_input("Date", value=date.today())
-        nicotine = st.number_input("Nicotine pouches", min_value=0, max_value=99, step=1, value=0)
-        vape_puffs = st.number_input("Vape puffs", min_value=0, max_value=9999, step=1, value=0)
-        caffeine = st.number_input("Caffeine (mg)", min_value=0, max_value=3000, step=25, value=0)
-        weight = st.number_input("Weight (lbs)", min_value=0.0, max_value=999.0, step=0.1,
-                                  format="%.1f", value=0.0)
-        cpap_ahi = st.number_input("CPAP AHI", min_value=0.0, max_value=999.0, step=0.1,
-                                    format="%.1f", value=0.0)
-        cpap_hours = st.number_input("CPAP hours used", min_value=0.0, max_value=24.0, step=0.25,
-                                      format="%.2f", value=0.0)
-        cpap_leak = st.number_input("Leak 95th %tile (L/min)", min_value=0.0, max_value=999.0,
-                                     step=0.5, format="%.1f", value=0.0)
-        notes = st.text_input("Notes")
-        submitted = st.form_submit_button("💾 Save", use_container_width=True, type="primary")
+    with st.expander("✏️ Log Entry", expanded=False):
+        with st.form("manual_entry", clear_on_submit=True):
+            log_date = st.date_input("Date", value=date.today())
+            nicotine = st.number_input("Nicotine pouches", min_value=0, max_value=99, step=1, value=0)
+            vape_puffs = st.number_input("Vape puffs", min_value=0, max_value=9999, step=1, value=0)
+            caffeine = st.number_input("Caffeine (mg)", min_value=0, max_value=3000, step=25, value=0)
+            weight = st.number_input("Weight (lbs)", min_value=0.0, max_value=999.0, step=0.1,
+                                      format="%.1f", value=0.0)
+            cpap_ahi = st.number_input("CPAP AHI", min_value=0.0, max_value=999.0, step=0.1,
+                                        format="%.1f", value=0.0)
+            cpap_hours = st.number_input("CPAP hours used", min_value=0.0, max_value=24.0, step=0.25,
+                                          format="%.2f", value=0.0)
+            cpap_leak = st.number_input("Leak 95th %tile (L/min)", min_value=0.0, max_value=999.0,
+                                         step=0.5, format="%.1f", value=0.0)
+            notes = st.text_input("Notes")
+            submitted = st.form_submit_button("💾 Save", use_container_width=True, type="primary")
 
     if submitted:
         df_log = init_manual_log()
