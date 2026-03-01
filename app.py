@@ -27,7 +27,7 @@ OURA_BASE = "https://api.ouraring.com/v2/usercollection"
 
 MANUAL_COLUMNS = [
     "date", "nicotine_pouches", "vape_puffs", "caffeine_mg",
-    "weight_lbs", "cpap_ahi", "cpap_hours", "cpap_leak_95", "notes",
+    "weight_lbs", "cpap_ahi", "cpap_hours", "cpap_flow_limit_95", "notes",
 ]
 STREAKS_FILE = DATA_DIR / "streaks.json"
 
@@ -352,8 +352,8 @@ with st.sidebar:
                                         format="%.1f", value=0.0)
             cpap_hours = st.number_input("CPAP hours used", min_value=0.0, max_value=24.0, step=0.25,
                                           format="%.2f", value=0.0)
-            cpap_leak = st.number_input("Leak 95th %tile (L/min)", min_value=0.0, max_value=999.0,
-                                         step=0.5, format="%.1f", value=0.0)
+            cpap_flow_limit = st.number_input("95% Flow Limitation", min_value=0.0, max_value=999.0,
+                                              step=0.01, format="%.2f", value=0.0)
             notes = st.text_input("Notes")
             submitted = st.form_submit_button("💾 Save", use_container_width=True, type="primary")
 
@@ -367,7 +367,7 @@ with st.sidebar:
             "weight_lbs": weight if weight > 0 else None,
             "cpap_ahi": cpap_ahi if cpap_ahi > 0 else None,
             "cpap_hours": cpap_hours if cpap_hours > 0 else None,
-            "cpap_leak_95": cpap_leak if cpap_leak > 0 else None,
+            "cpap_flow_limit_95": cpap_flow_limit if cpap_flow_limit > 0 else None,
             "notes": notes or None,
         }
         df_log = upsert_row(df_log, new_row)
@@ -406,7 +406,7 @@ df_manual = df_all_manual[
     (df_all_manual["date"] <= pd.Timestamp(end_date))
 ].copy().sort_values("date").reset_index(drop=True)
 
-for col in ["nicotine_pouches", "vape_puffs", "caffeine_mg", "weight_lbs", "cpap_ahi", "cpap_hours", "cpap_leak_95"]:
+for col in ["nicotine_pouches", "vape_puffs", "caffeine_mg", "weight_lbs", "cpap_ahi", "cpap_hours", "cpap_flow_limit_95"]:
     df_manual[col] = pd.to_numeric(df_manual[col], errors="coerce")
 
 # Forward-fill weight so gaps carry the last known value for charts
@@ -453,8 +453,6 @@ with tab_overview:
 
     st.subheader("Most Recent Values")
 
-    last_manual = df_manual.dropna(subset=["date"]).iloc[-1] if not df_manual.empty else None
-
     def safe_int(v):
         try:
             return int(float(v))
@@ -470,11 +468,11 @@ with tab_overview:
     sleep_score = safe_int(latest_val(df_sleep, "score"))
     readiness_score = safe_int(latest_val(df_readiness, "score"))
     steps = safe_int(latest_val(df_activity, "steps"))
-    nicotine_latest = safe_int(last_manual["nicotine_pouches"]) if last_manual is not None else None
-    vape_latest = safe_int(last_manual["vape_puffs"]) if last_manual is not None else None
-    caffeine_latest = safe_int(last_manual["caffeine_mg"]) if last_manual is not None else None
-    ahi_latest = safe_float(last_manual["cpap_ahi"]) if last_manual is not None else None
-    weight_latest = safe_float(last_manual["weight_lbs"]) if last_manual is not None else None
+    nicotine_latest = safe_int(latest_val(df_manual, "nicotine_pouches"))
+    vape_latest = safe_int(latest_val(df_manual, "vape_puffs"))
+    caffeine_latest = safe_int(latest_val(df_manual, "caffeine_mg"))
+    ahi_latest = safe_float(latest_val(df_manual, "cpap_ahi"))
+    weight_latest = safe_float(latest_val(df_manual, "weight_lbs"))
 
     # Compute deltas (change from previous data point)
     d_sleep = calc_delta(df_sleep, "score")
@@ -805,7 +803,7 @@ with tab_lifestyle:
         else:
             df_ls = df_all_manual.copy()
         df_ls = df_ls.sort_values("date").reset_index(drop=True)
-        for col in ["nicotine_pouches", "vape_puffs", "caffeine_mg", "weight_lbs", "cpap_ahi", "cpap_hours", "cpap_leak_95"]:
+        for col in ["nicotine_pouches", "vape_puffs", "caffeine_mg", "weight_lbs", "cpap_ahi", "cpap_hours", "cpap_flow_limit_95"]:
             df_ls[col] = pd.to_numeric(df_ls[col], errors="coerce")
         df_ls["weight_lbs"] = df_ls["weight_lbs"].ffill()
 
@@ -881,69 +879,73 @@ with tab_lifestyle:
 with tab_cpap:
     st.subheader("😮‍💨 CPAP Data")
 
-    with st.expander("📂 Import from OSCAR CSV export"):
-        st.markdown(
-            "In OSCAR: open a session → **File → Export → Daily Summary CSV**. "
-            "Then upload that file here."
-        )
-        uploaded = st.file_uploader("Upload OSCAR daily summary CSV", type=["csv"],
-                                    key="oscar_upload")
-        if uploaded:
-            try:
-                df_oscar = pd.read_csv(uploaded)
-                st.write("**Preview (first 5 rows):**")
-                st.dataframe(df_oscar.head())
+    @st.fragment
+    def oscar_import_fragment():
+        with st.expander("📂 Import from OSCAR CSV export"):
+            st.markdown(
+                "In OSCAR: open a session → **File → Export → Daily Summary CSV**. "
+                "Then upload that file here."
+            )
+            uploaded = st.file_uploader("Upload OSCAR daily summary CSV", type=["csv"],
+                                        key="oscar_upload")
+            if uploaded:
+                try:
+                    df_oscar = pd.read_csv(uploaded)
+                    st.write("**Preview (first 5 rows):**")
+                    st.dataframe(df_oscar.head())
 
-                all_cols = ["(skip)"] + list(df_oscar.columns)
+                    all_cols = ["(skip)"] + list(df_oscar.columns)
 
-                def best_match(keywords):
-                    for kw in keywords:
-                        for i, c in enumerate(all_cols):
-                            if kw in c.lower():
-                                return i
-                    return 0
+                    def best_match(keywords):
+                        for kw in keywords:
+                            for i, c in enumerate(all_cols):
+                                if kw in c.lower():
+                                    return i
+                        return 0
 
-                col_date = st.selectbox("Date column", all_cols,
-                                        index=best_match(["date", "day"]))
-                col_ahi = st.selectbox("AHI column", all_cols,
-                                       index=best_match(["ahi"]))
-                col_hours = st.selectbox("Usage hours column", all_cols,
-                                         index=best_match(["hour", "duration", "usage"]))
-                col_leak = st.selectbox("Leak 95th %tile column", all_cols,
-                                        index=best_match(["leak", "95"]))
+                    col_date = st.selectbox("Date column", all_cols,
+                                            index=best_match(["date", "day"]))
+                    col_ahi = st.selectbox("AHI column", all_cols,
+                                           index=best_match(["ahi"]))
+                    col_hours = st.selectbox("Total time / Usage hours column", all_cols,
+                                             index=best_match(["total time", "hour", "duration", "usage"]))
+                    col_flow = st.selectbox("95% Flow Limit column", all_cols,
+                                            index=best_match(["95% flow", "flow limit"]))
 
-                if st.button("⬆️ Import OSCAR Data", type="primary"):
-                    df_log = init_manual_log()
-                    imported = 0
-                    for _, row in df_oscar.iterrows():
-                        if col_date == "(skip)":
-                            continue
-                        try:
-                            entry_date = str(pd.Timestamp(row[col_date]).date())
-                        except Exception:
-                            continue
-                        updates: dict = {"date": entry_date}
-                        if col_ahi != "(skip)":
-                            updates["cpap_ahi"] = row.get(col_ahi)
-                        if col_hours != "(skip)":
-                            updates["cpap_hours"] = parse_duration_hours(row.get(col_hours))
-                        if col_leak != "(skip)":
-                            updates["cpap_leak_95"] = row.get(col_leak)
-                        df_log = upsert_row(df_log, updates)
-                        imported += 1
-                    save_manual_log(df_log)
-                    st.success(f"Imported {imported} OSCAR records!")
-                    st.cache_data.clear()
-                    st.rerun()
+                    if st.button("⬆️ Import OSCAR Data", type="primary"):
+                        df_log = init_manual_log()
+                        imported = 0
+                        for _, row in df_oscar.iterrows():
+                            if col_date == "(skip)":
+                                continue
+                            try:
+                                entry_date = str(pd.Timestamp(row[col_date]).date())
+                            except Exception:
+                                continue
+                            updates: dict = {"date": entry_date}
+                            if col_ahi != "(skip)":
+                                updates["cpap_ahi"] = row.get(col_ahi)
+                            if col_hours != "(skip)":
+                                updates["cpap_hours"] = parse_duration_hours(row.get(col_hours))
+                            if col_flow != "(skip)":
+                                updates["cpap_flow_limit_95"] = row.get(col_flow)
+                            df_log = upsert_row(df_log, updates)
+                            imported += 1
+                        save_manual_log(df_log)
+                        st.success(f"Imported {imported} OSCAR records!")
+                        st.cache_data.clear()
+                        st.rerun()
 
-            except Exception as e:
-                st.error(f"Error reading file: {e}")
+                except Exception as e:
+                    st.error(f"Error reading file: {e}")
+
+    oscar_import_fragment()
 
     # Charts
     df_cpap = df_manual[
         df_manual["cpap_ahi"].notna() |
         df_manual["cpap_hours"].notna() |
-        df_manual["cpap_leak_95"].notna()
+        df_manual["cpap_flow_limit_95"].notna()
     ]
 
     if df_cpap.empty:
@@ -981,15 +983,12 @@ with tab_cpap:
                 avg_hrs = df_hrs["cpap_hours"].mean()
                 st.metric("Average hours/night", f"{avg_hrs:.1f}")
 
-        if df_cpap["cpap_leak_95"].notna().any():
-            st.subheader("Leak Rate — 95th Percentile")
-            df_leak = df_cpap[df_cpap["cpap_leak_95"].notna()]
-            fig_leak = line_chart(df_leak, "date", "cpap_leak_95",
-                                  "Leak Rate (95th %tile)", "#a78bfa", "L/min")
-            fig_leak.add_hline(y=24, line_dash="dash", line_color="#6b7280",
-                               annotation_text="24 L/min threshold",
-                               annotation_position="top right")
-            st.plotly_chart(fig_leak, use_container_width=True)
+        if df_cpap["cpap_flow_limit_95"].notna().any():
+            st.subheader("95% Flow Limitation")
+            df_fl = df_cpap[df_cpap["cpap_flow_limit_95"].notna()]
+            fig_fl = line_chart(df_fl, "date", "cpap_flow_limit_95",
+                                "95% Flow Limitation", "#a78bfa", "")
+            st.plotly_chart(fig_fl, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1004,7 +1003,7 @@ with tab_data:
 
         df_editor_src = init_manual_log().copy()
         df_editor_src["date"] = pd.to_datetime(df_editor_src["date"], errors="coerce").dt.date
-        for col in ["nicotine_pouches", "vape_puffs", "caffeine_mg", "weight_lbs", "cpap_ahi", "cpap_hours", "cpap_leak_95"]:
+        for col in ["nicotine_pouches", "vape_puffs", "caffeine_mg", "weight_lbs", "cpap_ahi", "cpap_hours", "cpap_flow_limit_95"]:
             df_editor_src[col] = pd.to_numeric(df_editor_src[col], errors="coerce")
 
         edited = st.data_editor(
@@ -1019,7 +1018,7 @@ with tab_data:
                 "weight_lbs": st.column_config.NumberColumn("Weight (lbs)", min_value=0.0, max_value=999.0, step=0.1, format="%.1f"),
                 "cpap_ahi": st.column_config.NumberColumn("CPAP AHI", min_value=0.0, format="%.1f"),
                 "cpap_hours": st.column_config.NumberColumn("CPAP Hours", min_value=0.0, max_value=24.0, format="%.2f"),
-                "cpap_leak_95": st.column_config.NumberColumn("Leak 95th %tile", min_value=0.0, format="%.1f"),
+                "cpap_flow_limit_95": st.column_config.NumberColumn("95% Flow Limit", min_value=0.0, format="%.2f"),
                 "notes": st.column_config.TextColumn("Notes"),
             },
         )
