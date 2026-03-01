@@ -92,6 +92,40 @@ st.markdown("""
     [data-testid="stSidebar"] button[kind="header"] svg {
         color: #60a5fa;
     }
+
+    /* ── Mobile responsive ────────────────────────────────────────────── */
+    @media (max-width: 768px) {
+        /* Stack columns vertically */
+        [data-testid="stHorizontalBlock"] {
+            flex-direction: column !important;
+        }
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            width: 100% !important;
+            flex: 1 1 100% !important;
+        }
+
+        /* Compact top padding */
+        .block-container { padding-top: 1rem; padding-left: 1rem; padding-right: 1rem; }
+
+        /* Smaller title on mobile */
+        h1 { font-size: 1.5rem !important; }
+
+        /* Full-width metric cards */
+        [data-testid="metric-container"] {
+            padding: 10px 14px;
+            margin-bottom: 6px;
+        }
+
+        /* Larger tap targets for form inputs */
+        [data-testid="stSidebar"] input,
+        [data-testid="stSidebar"] button {
+            min-height: 44px;
+            font-size: 16px !important; /* prevents iOS zoom on focus */
+        }
+
+        /* Radio buttons more tappable */
+        .stRadio label { padding: 8px 4px; }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -237,6 +271,16 @@ def latest_val(df, col):
         return None
     s = pd.to_numeric(df[col], errors="coerce").dropna()
     return s.iloc[-1] if len(s) else None
+
+
+def calc_delta(df, col):
+    """Return the difference between the last two non-null values, or None."""
+    if df.empty or col not in df.columns:
+        return None
+    s = pd.to_numeric(df[col], errors="coerce").dropna()
+    if len(s) < 2:
+        return None
+    return round(float(s.iloc[-1] - s.iloc[-2]), 1)
 
 
 # ── Streak helpers ────────────────────────────────────────────────────────────
@@ -432,16 +476,34 @@ with tab_overview:
     ahi_latest = safe_float(last_manual["cpap_ahi"]) if last_manual is not None else None
     weight_latest = safe_float(last_manual["weight_lbs"]) if last_manual is not None else None
 
+    # Compute deltas (change from previous data point)
+    d_sleep = calc_delta(df_sleep, "score")
+    d_readiness = calc_delta(df_readiness, "score")
+    d_steps = calc_delta(df_activity, "steps")
+    d_nicotine = calc_delta(df_manual, "nicotine_pouches")
+    d_vape = calc_delta(df_manual, "vape_puffs")
+    d_caffeine = calc_delta(df_manual, "caffeine_mg")
+    d_ahi = calc_delta(df_manual, "cpap_ahi")
+    d_weight = calc_delta(df_manual, "weight_lbs")
+
     m1, m2, m3, m4 = st.columns(4)
     m5, m6, m7, m8 = st.columns(4)
-    m1.metric("😴 Sleep Score", sleep_score if sleep_score is not None else "—")
-    m2.metric("⚡ Readiness", readiness_score if readiness_score is not None else "—")
-    m3.metric("👟 Steps", f"{steps:,}" if steps is not None else "—")
-    m4.metric("⚖️ Weight", f"{weight_latest} lbs" if weight_latest is not None else "—")
-    m5.metric("🫧 Pouches", f"{nicotine_latest}" if nicotine_latest is not None else "—")
-    m6.metric("💨 Vape puffs", f"{vape_latest}" if vape_latest is not None else "—")
-    m7.metric("☕ Caffeine", f"{caffeine_latest} mg" if caffeine_latest is not None else "—")
-    m8.metric("😮‍💨 CPAP AHI", f"{ahi_latest}" if ahi_latest is not None else "—")
+    m1.metric("😴 Sleep Score", sleep_score if sleep_score is not None else "—",
+              delta=d_sleep, delta_color="normal")
+    m2.metric("⚡ Readiness", readiness_score if readiness_score is not None else "—",
+              delta=d_readiness, delta_color="normal")
+    m3.metric("👟 Steps", f"{steps:,}" if steps is not None else "—",
+              delta=f"{d_steps:+,.0f}" if d_steps is not None else None, delta_color="normal")
+    m4.metric("⚖️ Weight", f"{weight_latest} lbs" if weight_latest is not None else "—",
+              delta=f"{d_weight:+.1f} lbs" if d_weight is not None else None, delta_color="off")
+    m5.metric("🫧 Pouches", f"{nicotine_latest}" if nicotine_latest is not None else "—",
+              delta=d_nicotine, delta_color="inverse")
+    m6.metric("💨 Vape puffs", f"{vape_latest}" if vape_latest is not None else "—",
+              delta=d_vape, delta_color="inverse")
+    m7.metric("☕ Caffeine", f"{caffeine_latest} mg" if caffeine_latest is not None else "—",
+              delta=f"{d_caffeine:+.0f} mg" if d_caffeine is not None else None, delta_color="inverse")
+    m8.metric("😮‍💨 CPAP AHI", f"{ahi_latest}" if ahi_latest is not None else "—",
+              delta=d_ahi, delta_color="inverse")
 
     st.divider()
     st.subheader(f"Trends — {start_date.strftime('%b %-d')} → {end_date.strftime('%b %-d, %Y')}")
@@ -504,6 +566,66 @@ with tab_overview:
                                        "#60a5fa", "events/hr"), use_container_width=True)
         else:
             st.caption("CPAP — no data logged")
+
+    # ── Correlations ─────────────────────────────────────────────────────────
+    if not df_manual.empty and not df_sleep.empty:
+        # Merge manual data with sleep scores on date
+        df_manual_dt = df_manual.copy()
+        df_sleep_dt = df_sleep[["date", "score"]].rename(columns={"score": "sleep_score"}).copy()
+        df_sleep_dt["sleep_score"] = pd.to_numeric(df_sleep_dt["sleep_score"], errors="coerce")
+        df_corr = pd.merge(df_manual_dt, df_sleep_dt, on="date", how="inner")
+
+        # Also merge readiness if available
+        if not df_readiness.empty:
+            df_read_dt = df_readiness[["date", "score"]].rename(columns={"score": "readiness_score"}).copy()
+            df_read_dt["readiness_score"] = pd.to_numeric(df_read_dt["readiness_score"], errors="coerce")
+            df_corr = pd.merge(df_corr, df_read_dt, on="date", how="left")
+
+        # Build list of correlations that have enough data
+        corr_charts = []
+        MIN_POINTS = 5
+
+        if "caffeine_mg" in df_corr.columns:
+            df_caf_sleep = df_corr[df_corr["caffeine_mg"].notna() & df_corr["sleep_score"].notna()]
+            if len(df_caf_sleep) >= MIN_POINTS:
+                corr_charts.append(("caffeine_mg", "sleep_score", "Caffeine vs Sleep Score",
+                                    "Caffeine (mg)", "Sleep Score", "#fbbf24", df_caf_sleep))
+
+        if "nicotine_pouches" in df_corr.columns:
+            df_nic_sleep = df_corr[df_corr["nicotine_pouches"].notna() & df_corr["sleep_score"].notna()]
+            if len(df_nic_sleep) >= MIN_POINTS:
+                corr_charts.append(("nicotine_pouches", "sleep_score", "Pouches vs Sleep Score",
+                                    "Pouches", "Sleep Score", "#f87171", df_nic_sleep))
+
+        if "readiness_score" in df_corr.columns and "caffeine_mg" in df_corr.columns:
+            df_caf_read = df_corr[df_corr["caffeine_mg"].notna() & df_corr["readiness_score"].notna()]
+            if len(df_caf_read) >= MIN_POINTS:
+                corr_charts.append(("caffeine_mg", "readiness_score", "Caffeine vs Readiness",
+                                    "Caffeine (mg)", "Readiness Score", "#4ade80", df_caf_read))
+
+        if corr_charts:
+            st.divider()
+            st.subheader("Correlations")
+            st.caption("Scatter plots showing relationships between your habits and Oura scores. "
+                       "Trend lines help reveal patterns — but correlation isn't causation!")
+            corr_cols = st.columns(len(corr_charts))
+            for col, (x_col, y_col, title, x_label, y_label, color, df_plot) in zip(corr_cols, corr_charts):
+                with col:
+                    fig_corr = px.scatter(
+                        df_plot, x=x_col, y=y_col,
+                        trendline="ols",
+                        color_discrete_sequence=[color],
+                        template="plotly_dark",
+                    )
+                    fig_corr.update_layout(
+                        title=dict(text=title, font_size=14),
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        margin=dict(l=0, r=0, t=36, b=0),
+                        xaxis_title=x_label, yaxis_title=y_label,
+                        showlegend=False,
+                    )
+                    fig_corr.update_traces(marker=dict(size=8, opacity=0.7))
+                    st.plotly_chart(fig_corr, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
